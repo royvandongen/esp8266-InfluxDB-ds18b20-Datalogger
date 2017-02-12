@@ -38,10 +38,10 @@
 WiFiClient client;
 
 //InfluxDB Server
-#define INFLUXDB_SERVER        "something.something.something"  // Your InfluxDB Server FQDN
+#define INFLUXDB_SERVER        "something.something.something"       // Your InfluxDB Server FQDN
 #define INFLUXDB_PORT          8089                             // Default InfluxDB UDP Port
 #define INFLUXDB_INTERVAL      10000                            // Milliseconds between measurements 
-String SENSOR_LOCATION      =  "livingroom";                      // This location is used for the "device=" part of the InfluxDB update
+String SENSOR_LOCATION      =  "livingroom";                // This location is used for the "device=" part of the InfluxDB update
 WiFiUDP udp;
 
 //Time settings
@@ -75,6 +75,7 @@ DallasTemperature sensors(&oneWire);
 
 void setup(void) {
   Serial.begin ( 115200 );
+  WiFi.mode(WIFI_STA); //Do not host an AP after boot 
   WiFi.begin ( AP_SSID, AP_PASSWORD );
   Serial.println ( "" );
   // Wait for connection
@@ -229,9 +230,9 @@ bool isDSTSwitchDay(int d, int m, int y){
 void sendData( time_t time ) {
   String line, temperature;
     
-  line = String("temperature,device=" + SENSOR_LOCATION + " value=" + sensors.getTempCByIndex(0));
+  line = String("tapwater_out,device=" + SENSOR_LOCATION + " value=" + sensors.getTempCByIndex(0));
   Serial.println(line);
-  
+
   // send the packet
   Serial.println("Sending UDP packet...");
   udp.beginPacket(INFLUXDB_SERVER, INFLUXDB_PORT);
