@@ -26,22 +26,20 @@
  * Ground --------------------------------
  */
 #include <ESP8266WiFi.h>
+#include <DNSServer.h>            //Local DNS Server used for redirecting all requests to the configuration portal
+#include <ESP8266WebServer.h>     //Local WebServer used to serve the configuration portal
+#include <WiFiManager.h>          //https://github.com/tzapu/WiFiManager WiFi Configuration Magic
+
 #include <WiFiUdp.h>
 #include <TimeLib.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
-
-//WiFi Settings
-#define AP_SSID     "YourSSID"
-#define AP_PASSWORD "YourPassword"
-WiFiClient client;
-
 //InfluxDB Server
-#define INFLUXDB_SERVER        "something.something.something"       // Your InfluxDB Server FQDN
+#define INFLUXDB_SERVER        "something.something.something"  // Your InfluxDB Server FQDN
 #define INFLUXDB_PORT          8089                             // Default InfluxDB UDP Port
 #define INFLUXDB_INTERVAL      10000                            // Milliseconds between measurements 
-String SENSOR_LOCATION      =  "livingroom";                // This location is used for the "device=" part of the InfluxDB update
+String SENSOR_LOCATION      =  "livingroom";                    // This location is used for the "device=" part of the InfluxDB update
 WiFiUDP udp;
 
 //Time settings
@@ -68,26 +66,29 @@ unsigned long   lastInfluxDBupdate  = 0;
 
 //OneWire settings
 #define ONE_WIRE_BUS 2  // DS18B20 pin use a 4.7K resistor
+#define NumberOfDevices 10                         // Set maximum number of devices in order to dimension 
+                                                   // Array holding all Device Address arrays.
 
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature sensors(&oneWire);
+byte allAddress [NumberOfDevices][8];              // Device Addresses are 8-element byte arrays.
+                                                   // we need one for each of our DS18B20 sensors.
 
+byte totalDevices;                                 // Declare variable to store number of One Wire devices
+                                                   // that are actually discovered.
 
 void setup(void) {
   Serial.begin ( 115200 );
-  WiFi.mode(WIFI_STA); //Do not host an AP after boot 
-  WiFi.begin ( AP_SSID, AP_PASSWORD );
-  Serial.println ( "" );
-  // Wait for connection
-  while ( WiFi.status() != WL_CONNECTED ) {
-    delay ( 500 );
-    Serial.print ( "." );                              
-  }
 
-  Serial.println ( "" );
-  Serial.print ( "Connected to " );
-  Serial.println ( AP_SSID );
-  Serial.print ( "IP address: " );
+  WiFiManager wifiManager;
+  //reset saved settings
+  //wifiManager.resetSettings();
+
+  
+  String ssid = "SENSOR-DS18B20-" + String(ESP.getChipId());
+  wifiManager.autoConnect(ssid.c_str()); 
+
+  Serial.print( "IP address: " );
   Serial.println ( WiFi.localIP() );
 
   Serial.print ( "Starting UDP: " );
@@ -97,6 +98,9 @@ void setup(void) {
   setSyncInterval(SYNC_INTERVAL);
 
   sensors.begin();
+  totalDevices = discoverOneWireDevices();         // get addresses of our one wire devices into allAddress array 
+  for (byte i=0; i < totalDevices; i++) 
+    sensors.setResolution(allAddress[i], 10);      // and set the a to d conversion resolution of each.
   
 }
 
@@ -118,7 +122,9 @@ void loop(void) {
     lastInfluxDBupdate = millis();
     sensors.requestTemperatures();
     
-    sendData(t);
+    for (byte i=0; i < totalDevices; i++) {
+      pollTemperature(allAddress[i]);
+    }
   }
 }
 
@@ -227,15 +233,64 @@ bool isDSTSwitchDay(int d, int m, int y){
     return dst;
 }
 
-void sendData( time_t time ) {
+byte discoverOneWireDevices() {
+  byte j=0;                                        // search for one wire devices and
+                                                   // copy to device address arrays.
+  while ((j < NumberOfDevices) && (oneWire.search(allAddress[j]))) {        
+    j++;
+  }
+  for (byte i=0; i < j; i++) {
+    Serial.print("Device ");
+    Serial.print(i);  
+    Serial.print(": ");                          
+    printAddress(allAddress[i]);                  // print address from each device address arry.
+  }
+  Serial.print("\r\n");
+  return j                      ;                 // return total number of devices found.
+}
+
+void printAddress(DeviceAddress addr) {
+  byte i;
+  for( i=0; i < 8; i++) {                         // prefix the printout with 0x
+      Serial.print("0x");
+      if (addr[i] < 16) {
+        Serial.print('0');                        // add a leading '0' if required.
+      }
+      Serial.print(addr[i], HEX);                 // print the actual value in HEX
+      if (i < 7) {
+        Serial.print(", ");
+      }
+    }
+  Serial.print("\r\n");
+}
+
+void sendData(String DeviceSerial, float tempC) {
   String line, temperature;
     
-  line = String("tapwater_out,device=" + SENSOR_LOCATION + " value=" + sensors.getTempCByIndex(0));
+  line = String(SENSOR_LOCATION + ",sensor=" + DeviceSerial + " value=" + tempC);
   Serial.println(line);
 
-  // send the packet
+    //send the packet
   Serial.println("Sending UDP packet...");
   udp.beginPacket(INFLUXDB_SERVER, INFLUXDB_PORT);
   udp.print(line);
   udp.endPacket();
+}
+
+void pollTemperature(DeviceAddress addr) {
+  sensors.requestTemperatures();
+  float tempC = sensors.getTempC(addr);
+  if(sensors.getTempCByIndex(0) == -127) {
+    Serial.println("No sensor connected");
+  } else {
+    byte i;
+    String DeviceSerial = "";
+    for( i=0; i < 8; i++) {
+      if (addr[i] < 16) {
+        DeviceSerial += "0";                    // add a leading '0' if required.
+      }
+      DeviceSerial += String(addr[i], HEX);
+    }
+    sendData(DeviceSerial, tempC);
+  }
 }
